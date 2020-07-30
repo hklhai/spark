@@ -19,7 +19,7 @@ package org.apache.spark.mllib.optimization
 
 import scala.util.Random
 
-import org.scalatest.Matchers
+import org.scalatest.matchers.must.Matchers
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.linalg.Vectors
@@ -191,8 +191,8 @@ class LBFGSSuite extends SparkFunSuite with MLlibTestSparkContext with Matchers 
     // With smaller convergenceTol, it takes more steps.
     assert(lossLBFGS3.length > lossLBFGS2.length)
 
-    // Based on observation, lossLBFGS3 runs 7 iterations, no theoretically guaranteed.
-    assert(lossLBFGS3.length == 7)
+    // Based on observation, lossLBFGS3 runs 6 iterations, no theoretically guaranteed.
+    assert(lossLBFGS3.length == 6)
     assert((lossLBFGS3(4) - lossLBFGS3(5)) / lossLBFGS3(4) < convergenceTol)
   }
 

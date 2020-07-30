@@ -1,19 +1,19 @@
 /*
-* Licensed to the Apache Software Foundation (ASF) under one or more
-* contributor license agreements.  See the NOTICE file distributed with
-* this work for additional information regarding copyright ownership.
-* The ASF licenses this file to You under the Apache License, Version 2.0
-* (the "License"); you may not use this file except in compliance with
-* the License.  You may obtain a copy of the License at
-*
-*    http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 package org.apache.spark.sql.sources
 
@@ -23,11 +23,13 @@ import java.sql.{Date, Timestamp}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
 
 class DefaultSource extends SimpleScanSource
 
+// This class is used by pyspark tests. If this class is modified/moved, make sure pyspark
+// tests still pass.
 class SimpleScanSource extends RelationProvider {
   override def createRelation(
       sqlContext: SQLContext,
@@ -106,7 +108,7 @@ case class AllDataTypesScan(
   }
 }
 
-class TableScanSuite extends DataSourceTest with SharedSQLContext {
+class TableScanSuite extends DataSourceTest with SharedSparkSession {
   protected override lazy val sql = spark.sql _
 
   private lazy val tableWithSchemaExpected = (1 to 10).map { i =>
@@ -356,7 +358,7 @@ class TableScanSuite extends DataSourceTest with SharedSQLContext {
     // Make sure we do throw correct exception when users use a relation provider that
     // only implements the RelationProvider or the SchemaRelationProvider.
     Seq("TEMPORARY VIEW", "TABLE").foreach { tableType =>
-      val schemaNotAllowed = intercept[Exception] {
+      val schemaNotMatch = intercept[Exception] {
         sql(
           s"""
              |CREATE $tableType relationProvierWithSchema (i int)
@@ -367,7 +369,8 @@ class TableScanSuite extends DataSourceTest with SharedSQLContext {
              |)
            """.stripMargin)
       }
-      assert(schemaNotAllowed.getMessage.contains("does not allow user-specified schemas"))
+      assert(schemaNotMatch.getMessage.contains(
+        "The user-specified schema doesn't match the actual schema"))
 
       val schemaNeeded = intercept[Exception] {
         sql(

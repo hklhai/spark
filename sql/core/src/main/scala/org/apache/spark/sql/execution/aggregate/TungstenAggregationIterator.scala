@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution.aggregate
 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
+import org.apache.spark.memory.SparkOutOfMemoryError
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
@@ -60,6 +61,8 @@ import org.apache.spark.unsafe.KVIterator
  *  - Part 8: A utility function used to generate a result when there is no
  *            input and there is no grouping expression.
  *
+ * @param partIndex
+ *   index of the partition
  * @param groupingExpressions
  *   expressions for grouping keys
  * @param aggregateExpressions
@@ -77,6 +80,7 @@ import org.apache.spark.unsafe.KVIterator
  *   the iterator containing input [[UnsafeRow]]s.
  */
 class TungstenAggregationIterator(
+    partIndex: Int,
     groupingExpressions: Seq[NamedExpression],
     aggregateExpressions: Seq[AggregateExpression],
     aggregateAttributes: Seq[Attribute],
@@ -91,6 +95,7 @@ class TungstenAggregationIterator(
     spillSize: SQLMetric,
     avgHashProbe: SQLMetric)
   extends AggregationIterator(
+    partIndex,
     groupingExpressions,
     originalInputAttributes,
     aggregateExpressions,
@@ -161,7 +166,7 @@ class TungstenAggregationIterator(
     initialAggregationBuffer,
     StructType.fromAttributes(aggregateFunctions.flatMap(_.aggBufferAttributes)),
     StructType.fromAttributes(groupingExpressions.map(_.toAttribute)),
-    TaskContext.get().taskMemoryManager(),
+    TaskContext.get(),
     1024 * 16, // initial capacity
     TaskContext.get().taskMemoryManager().pageSizeBytes
   )
@@ -201,7 +206,9 @@ class TungstenAggregationIterator(
           buffer = hashMap.getAggregationBufferFromUnsafeRow(groupingKey)
           if (buffer == null) {
             // failed to allocate the first page
-            throw new OutOfMemoryError("No enough memory for aggregation")
+            // scalastyle:off throwerror
+            throw new SparkOutOfMemoryError("No enough memory for aggregation")
+            // scalastyle:on throwerror
           }
         }
         processRow(buffer, newInput)
@@ -242,9 +249,9 @@ class TungstenAggregationIterator(
     // Basically the value of the KVIterator returned by externalSorter
     // will be just aggregation buffer, so we rewrite the aggregateExpressions to reflect it.
     val newExpressions = aggregateExpressions.map {
-      case agg @ AggregateExpression(_, Partial, _, _) =>
+      case agg @ AggregateExpression(_, Partial, _, _, _) =>
         agg.copy(mode = PartialMerge)
-      case agg @ AggregateExpression(_, Complete, _, _) =>
+      case agg @ AggregateExpression(_, Complete, _, _, _) =>
         agg.copy(mode = Final)
       case other => other
     }
@@ -367,7 +374,7 @@ class TungstenAggregationIterator(
     }
   }
 
-  TaskContext.get().addTaskCompletionListener(_ => {
+  TaskContext.get().addTaskCompletionListener[Unit](_ => {
     // At the end of the task, update the task's peak memory usage. Since we destroy
     // the map to create the sorter, their memory usages should not overlap, so it is safe
     // to just use the max of the two.
@@ -380,7 +387,7 @@ class TungstenAggregationIterator(
     metrics.incPeakExecutionMemory(maxMemory)
 
     // Updating average hashmap probe
-    avgHashProbe.set(hashMap.getAverageProbesPerLookup())
+    avgHashProbe.set(hashMap.getAvgHashProbeBucketListIterations)
   })
 
   ///////////////////////////////////////////////////////////////////////////

@@ -18,39 +18,50 @@
 package org.apache.spark.sql.catalyst.optimizer
 
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
 
 /**
-* push down operations into [[CreateNamedStructLike]].
-*/
-object SimplifyCreateStructOps extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = {
-    plan.transformExpressionsUp {
-      // push down field extraction
-      case GetStructField(createNamedStructLike: CreateNamedStructLike, ordinal, _) =>
-        createNamedStructLike.valExprs(ordinal)
-    }
-  }
-}
+ * Simplify redundant [[CreateNamedStruct]], [[CreateArray]] and [[CreateMap]] expressions.
+ */
+object SimplifyExtractValueOps extends Rule[LogicalPlan] {
+  override def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+    // One place where this optimization is invalid is an aggregation where the select
+    // list expression is a function of a grouping expression:
+    //
+    // SELECT struct(a,b).a FROM tbl GROUP BY struct(a,b)
+    //
+    // cannot be simplified to SELECT a FROM tbl GROUP BY struct(a,b). So just skip this
+    // optimization for Aggregates (although this misses some cases where the optimization
+    // can be made).
+    case a: Aggregate => a
+    case p => p.transformExpressionsUp {
+      // Remove redundant field extraction.
+      case GetStructField(createNamedStruct: CreateNamedStruct, ordinal, _) =>
+        createNamedStruct.valExprs(ordinal)
+      case GetStructField(w @ WithFields(struct, names, valExprs), ordinal, maybeName) =>
+        val name = w.dataType(ordinal).name
+        val matches = names.zip(valExprs).filter(_._1 == name)
+        if (matches.nonEmpty) {
+          // return last matching element as that is the final value for the field being extracted.
+          // For example, if a user submits a query like this:
+          // `$"struct_col".withField("b", lit(1)).withField("b", lit(2)).getField("b")`
+          // we want to return `lit(2)` (and not `lit(1)`).
+          matches.last._2
+        } else {
+          GetStructField(struct, ordinal, maybeName)
+        }
+      // Remove redundant array indexing.
+      case GetArrayStructFields(CreateArray(elems, useStringTypeWhenEmpty), field, ordinal, _, _) =>
+        // Instead of selecting the field on the entire array, select it from each member
+        // of the array. Pushing down the operation this way may open other optimizations
+        // opportunities (i.e. struct(...,x,...).x)
+        CreateArray(elems.map(GetStructField(_, ordinal, Some(field.name))), useStringTypeWhenEmpty)
 
-/**
-* push down operations into [[CreateArray]].
-*/
-object SimplifyCreateArrayOps extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = {
-    plan.transformExpressionsUp {
-      // push down field selection (array of structs)
-      case GetArrayStructFields(CreateArray(elems), field, ordinal, numFields, containsNull) =>
-        // instead f selecting the field on the entire array,
-        // select it from each member of the array.
-        // pushing down the operation this way open other optimizations opportunities
-        // (i.e. struct(...,x,...).x)
-        CreateArray(elems.map(GetStructField(_, ordinal, Some(field.name))))
-      // push down item selection.
-      case ga @ GetArrayItem(CreateArray(elems), IntegerLiteral(idx)) =>
-        // instead of creating the array and then selecting one row,
-        // remove array creation altgether.
+      // Remove redundant map lookup.
+      case ga @ GetArrayItem(CreateArray(elems, _), IntegerLiteral(idx)) =>
+        // Instead of creating the array and then selecting one row, remove array creation
+        // altogether.
         if (idx >= 0 && idx < elems.size) {
           // valid index
           elems(idx)
@@ -58,18 +69,7 @@ object SimplifyCreateArrayOps extends Rule[LogicalPlan] {
           // out of bounds, mimic the runtime behavior and return null
           Literal(null, ga.dataType)
         }
+      case GetMapValue(CreateMap(elems, _), key) => CaseKeyWhen(key, elems)
     }
   }
 }
-
-/**
-* push down operations into [[CreateMap]].
-*/
-object SimplifyCreateMapOps extends Rule[LogicalPlan] {
-  override def apply(plan: LogicalPlan): LogicalPlan = {
-    plan.transformExpressionsUp {
-      case GetMapValue(CreateMap(elems), key) => CaseKeyWhen(key, elems)
-    }
-  }
-}
-

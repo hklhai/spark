@@ -20,11 +20,12 @@ package org.apache.spark.ml.tuning
 import java.io.File
 import java.nio.file.{Files, StandardCopyOption}
 
-import org.apache.spark.SparkFunSuite
-import org.apache.spark.ml.param.{ParamMap, ParamPair, Params}
-import org.apache.spark.ml.util.{DefaultReadWriteTest, Identifiable, MLReader, MLWritable}
+import org.scalatest.Assertions
 
-object ValidatorParamsSuiteHelpers extends SparkFunSuite with DefaultReadWriteTest {
+import org.apache.spark.ml.param.{ParamMap, ParamPair, Params}
+import org.apache.spark.ml.util.{Identifiable, MLReader, MLWritable}
+
+object ValidatorParamsSuiteHelpers extends Assertions {
   /**
    * Assert sequences of estimatorParamMaps are identical.
    * If the values for a parameter are not directly comparable with ===
@@ -46,8 +47,7 @@ object ValidatorParamsSuiteHelpers extends SparkFunSuite with DefaultReadWriteTe
                 val estimatorParamMap2 = Array(estimator2.extractParamMap())
                 compareParamMaps(estimatorParamMap, estimatorParamMap2)
               case other =>
-                throw new AssertionError(s"Expected parameter of type Params but" +
-                  s" found ${otherParam.getClass.getName}")
+                fail(s"Expected parameter of type Params but found ${otherParam.getClass.getName}")
             }
           case _ =>
             assert(otherParam === v)
@@ -62,7 +62,7 @@ object ValidatorParamsSuiteHelpers extends SparkFunSuite with DefaultReadWriteTe
    * the path of the estimator so that if the parent directory changes, loading the
    * model still works.
    */
-  def testFileMove[T <: Params with MLWritable](instance: T): Unit = {
+  def testFileMove[T <: Params with MLWritable](instance: T, tempDir: File): Unit = {
     val uid = instance.uid
     val subdirName = Identifiable.randomUID("test")
 
